@@ -1,0 +1,25 @@
+{
+  "name": "beads-view",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "beads-view": "src/index.tsx"
+  },
+  "scripts": {
+    "start": "bun src/index.tsx",
+    "test": "bun test",
+    "build": "bun scripts/build.ts"
+  },
+  "dependencies": {
+    "ink": "^7.1.0",
+    "mysql2": "^3.22.6",
+    "react": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "bun-types": "^1.3.14",
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^7.0.2"
+  }
+}
