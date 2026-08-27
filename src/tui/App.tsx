@@ -14,6 +14,7 @@ import {
   formatRowLines,
   legendText,
   overflowLine,
+  shouldDimSegment,
   STATUS_HINTS,
   shortId,
   sortIssues,
@@ -285,22 +286,24 @@ export function App({
           {windowIssues.map((issue, i) => {
             const isSelected = winStart + i === selectedIndex;
             return (windowRowLines[i] ?? []).map((line, li) => (
-              <Text
-                key={`${issue.id}-${li}`}
-                wrap="truncate-end"
-                bold={isSelected}
-                color={isSelected ? 'white' : undefined}
-                backgroundColor={isSelected ? 'blue' : undefined}
-              >
-                {line.segments.map((seg, si) =>
-                  seg.dim ? (
-                    <Text key={si} dimColor>
-                      {seg.text}
-                    </Text>
-                  ) : (
-                    seg.text
-                  ),
-                )}
+              <Text key={`${issue.id}-${li}`} wrap="truncate-end">
+                {line.segments.map((seg, si) => (
+                  // Every segment carries its own bold/color/background: a
+                  // dim segment's closing SGR code (22) resets bold too
+                  // (bold and dim share one "intensity" attribute), which
+                  // would otherwise strip bold from whatever comes after it
+                  // on the same line if that text just inherited the row's
+                  // styling from one outer Text instead of re-asserting it.
+                  <Text
+                    key={si}
+                    bold={isSelected}
+                    dimColor={shouldDimSegment(seg, isSelected)}
+                    color={isSelected ? 'white' : undefined}
+                    backgroundColor={isSelected ? 'blue' : undefined}
+                  >
+                    {seg.text}
+                  </Text>
+                ))}
               </Text>
             ));
           })}

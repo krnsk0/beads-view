@@ -149,6 +149,19 @@ export interface RowSegment {
   dim?: boolean;
 }
 
+/**
+ * Whether a row segment should actually render dim. Ink/chalk's dim-close
+ * SGR code (22, "normal intensity") also resets bold, since bold and dim
+ * share one attribute in real terminals — so a dim segment sitting inside an
+ * otherwise-bold (selected) row silently strips bold from whatever follows
+ * it on that line, with no code left to reassert it. Selected rows are
+ * already visually distinct (inverted colors), so they skip dimming rather
+ * than risk that: never combine dim with bold on the same segment.
+ */
+export function shouldDimSegment(seg: RowSegment, isSelected: boolean): boolean {
+  return Boolean(seg.dim) && !isSelected;
+}
+
 export interface RowLine {
   segments: RowSegment[];
 }

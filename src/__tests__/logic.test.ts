@@ -13,6 +13,7 @@ import {
   rowChip,
   rowLineText,
   shortId,
+  shouldDimSegment,
   snapshotOf,
   sortIssues,
   statusById,
@@ -263,6 +264,29 @@ describe('formatRowLines', () => {
     );
     // Same title, wider id -> less room for title text before it has to wrap.
     expect(longId.length).toBeGreaterThanOrEqual(shortId.length);
+  });
+});
+
+describe('shouldDimSegment', () => {
+  // Regression pin for a rendering bug: Ink/chalk's dim-close SGR code (22)
+  // also resets bold (they share one "intensity" attribute), so a dim id
+  // segment inside a bold (selected) row silently stripped bold from the
+  // title text after it on that line, with no code left to turn bold back
+  // on — visible as a wrapped title's second line staying bold while the
+  // first line's title text (after the id) did not. The fix is to never
+  // combine dim with bold; this pins that a marked segment never dims while
+  // the row is selected/bold, in either direction of the boolean.
+  it('dims a marked segment when the row is not selected', () => {
+    expect(shouldDimSegment({ text: 'a ', dim: true }, false)).toBe(true);
+  });
+
+  it('never dims while the row is selected/bold', () => {
+    expect(shouldDimSegment({ text: 'a ', dim: true }, true)).toBe(false);
+  });
+
+  it('leaves non-dim segments alone either way', () => {
+    expect(shouldDimSegment({ text: 'Title' }, false)).toBe(false);
+    expect(shouldDimSegment({ text: 'Title' }, true)).toBe(false);
   });
 });
 
