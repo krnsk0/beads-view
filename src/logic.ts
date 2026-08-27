@@ -99,6 +99,16 @@ export function rowChip(issue: Issue): string {
 }
 
 /**
+ * Trim one code point (not one UTF-16 unit) off the end — plain slice(0, -1)
+ * splits an emoji into lone surrogates, which render as mojibake.
+ */
+function trimLastCodePoint(s: string): string {
+  const points = [...s];
+  points.pop();
+  return points.join('');
+}
+
+/**
  * Greedily fills `width` cells with whole words from `words` (hard-breaking
  * a single word wider than `width`), returning the fitted line and whatever
  * words didn't fit.
@@ -117,7 +127,7 @@ function greedyWrapWords(words: string[], width: number): { line: string; rest: 
     if (line !== '') break;
     // The word alone is wider than the budget: hard-break it so we still make progress.
     let take = word;
-    while (take.length > 1 && displayWidth(take) > budget) take = take.slice(0, -1);
+    while ([...take].length > 1 && displayWidth(take) > budget) take = trimLastCodePoint(take);
     const remainder = word.slice(take.length);
     return { line: take, rest: remainder ? [remainder, ...words.slice(i + 1)] : words.slice(i + 1) };
   }
@@ -139,7 +149,7 @@ export function wrapTitleForRow(title: string, firstWidth: number, fullWidth: nu
   if (second.rest.length === 0) return [first.line, second.line];
   let truncated = second.line;
   const maxWidth = Math.max(0, fullWidth - 1);
-  while (truncated.length > 0 && displayWidth(truncated) > maxWidth) truncated = truncated.slice(0, -1);
+  while (truncated.length > 0 && displayWidth(truncated) > maxWidth) truncated = trimLastCodePoint(truncated);
   return [first.line, `${truncated}…`];
 }
 
@@ -179,16 +189,31 @@ export function rowLineText(line: RowLine): string {
  * id. Wrapped continuation lines are plain and indent past the id so title
  * text stays aligned.
  */
+/**
+ * Clamp a `[chip]` to at most `maxWidth` cells by truncating its contents
+ * (with an ellipsis inside the closing bracket) — a pathologically long
+ * assignee must never push the row past the pane and get chopped by Ink's
+ * own truncation instead. Below a readable minimum the chip drops entirely.
+ */
+function clampChipToWidth(chip: string, maxWidth: number): string {
+  if (displayWidth(chip) <= maxWidth) return chip;
+  if (maxWidth < 5) return '';
+  let inner = chip.slice(1, -1);
+  while (inner.length > 0 && displayWidth(`[${inner}…]`) > maxWidth) inner = trimLastCodePoint(inner);
+  return `[${inner}…]`;
+}
+
 export function formatRowLines(issue: Issue, byId: Map<string, string>, width: number): RowLine[] {
   const icon = ICONS[bucketOf(issue, byId)];
   const epic = isEpic(issue) ? 'EPIC ' : '';
   const prefix = `${icon} ${epic}`;
   const idSeg = `${issue.id} `;
   const indentWidth = displayWidth(prefix) + displayWidth(idSeg);
-  const chip = `[${rowChip(issue)}]`;
-  const chipWidth = displayWidth(chip);
   const bodyWidth = Math.max(1, width - indentWidth);
-  const firstWidth = Math.max(1, bodyWidth - chipWidth - 1);
+  // The chip may claim at most the body minus a gap cell and one title cell.
+  const chip = clampChipToWidth(`[${rowChip(issue)}]`, Math.max(0, bodyWidth - 2));
+  const chipWidth = displayWidth(chip);
+  const firstWidth = chip ? Math.max(1, bodyWidth - chipWidth - 1) : bodyWidth;
 
   const titleLines = wrapTitleForRow(titleOf(issue), firstWidth, bodyWidth);
   const firstLine = titleLines[0] as string;
@@ -197,7 +222,7 @@ export function formatRowLines(issue: Issue, byId: Map<string, string>, width: n
     segments: [
       { text: prefix },
       { text: idSeg, dim: true },
-      { text: `${firstLine}${' '.repeat(gap)}${chip}` },
+      { text: chip ? `${firstLine}${' '.repeat(gap)}${chip}` : firstLine },
     ],
   };
   if (titleLines.length < 2) return [line1];

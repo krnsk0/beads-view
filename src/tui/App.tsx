@@ -20,6 +20,7 @@ import {
   sortIssues,
   statusById,
 } from '../logic';
+import type { RowLine } from '../logic';
 import type { IssueStore } from '../store';
 import type { LiveStatus } from '../types';
 import type { Workspace } from '../workspace';
@@ -173,6 +174,22 @@ export function App({
   const windowIssues = visible.slice(winStart, winEnd);
   const windowRowLines = rowLines.slice(winStart, winEnd);
 
+  // Flatten the window to terminal lines and hard-cap at the pane's budget
+  // ourselves: Ink/yoga does not reliably clip overflowing Text children (a
+  // row taller than the pane can hide the selected row's FIRST line and
+  // composite stray text over what remains), so never hand it more lines
+  // than fit. The overflow indicator renders only when a line is left for it
+  // (computeListWindow reserves one except when the selection needs the
+  // whole budget — there the indicator yields, never the selection).
+  const flatRowLines: Array<{ key: string; line: RowLine; isSelected: boolean }> = [];
+  windowIssues.forEach((issue, i) => {
+    const isSelected = winStart + i === selectedIndex;
+    for (const [li, line] of (windowRowLines[i] ?? []).entries()) {
+      if (flatRowLines.length < listInnerH) flatRowLines.push({ key: `${issue.id}-${li}`, line, isSelected });
+    }
+  });
+  const showOverflow = overflow > 0 && flatRowLines.length < listInnerH;
+
   const detail = selected ? detailLines(selected, detailInnerW, byId) : null;
   const maxScroll = detail ? Math.max(0, detail.lines.length - detailInnerH) : 0;
   const scroll = Math.min(detailScroll, maxScroll);
@@ -283,31 +300,28 @@ export function App({
           flexDirection="column"
           overflow="hidden"
         >
-          {windowIssues.map((issue, i) => {
-            const isSelected = winStart + i === selectedIndex;
-            return (windowRowLines[i] ?? []).map((line, li) => (
-              <Text key={`${issue.id}-${li}`} wrap="truncate-end">
-                {line.segments.map((seg, si) => (
-                  // Every segment carries its own bold/color/background: a
-                  // dim segment's closing SGR code (22) resets bold too
-                  // (bold and dim share one "intensity" attribute), which
-                  // would otherwise strip bold from whatever comes after it
-                  // on the same line if that text just inherited the row's
-                  // styling from one outer Text instead of re-asserting it.
-                  <Text
-                    key={si}
-                    bold={isSelected}
-                    dimColor={shouldDimSegment(seg, isSelected)}
-                    color={isSelected ? 'white' : undefined}
-                    backgroundColor={isSelected ? 'blue' : undefined}
-                  >
-                    {seg.text}
-                  </Text>
-                ))}
-              </Text>
-            ));
-          })}
-          {overflow > 0 && (
+          {flatRowLines.map(({ key, line, isSelected }) => (
+            <Text key={key} wrap="truncate-end">
+              {line.segments.map((seg, si) => (
+                // Every segment carries its own bold/color/background: a
+                // dim segment's closing SGR code (22) resets bold too
+                // (bold and dim share one "intensity" attribute), which
+                // would otherwise strip bold from whatever comes after it
+                // on the same line if that text just inherited the row's
+                // styling from one outer Text instead of re-asserting it.
+                <Text
+                  key={si}
+                  bold={isSelected}
+                  dimColor={shouldDimSegment(seg, isSelected)}
+                  color={isSelected ? 'white' : undefined}
+                  backgroundColor={isSelected ? 'blue' : undefined}
+                >
+                  {seg.text}
+                </Text>
+              ))}
+            </Text>
+          ))}
+          {showOverflow && (
             <Text color="gray" wrap="truncate-end">
               {overflowLine(overflow)}
             </Text>

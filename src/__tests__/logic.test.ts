@@ -182,6 +182,20 @@ describe('wrapTitleForRow', () => {
     expect(lines).toEqual(['supercalif', 'ragilisti…']);
     for (const l of lines) expect(displayWidth(l)).toBeLessThanOrEqual(10);
   });
+
+  it('clamps a pathologically long assignee chip instead of overflowing the row', () => {
+    const long = issue({ id: 'p-1', title: 'Ship it', assignee: 'x'.repeat(40) });
+    const lines = formatRowLines(long, new Map(), 38);
+    for (const line of lines) expect(displayWidth(rowLineText(line))).toBeLessThanOrEqual(38);
+    expect(rowLineText(lines[0] ?? { segments: [] })).toContain('…]');
+  });
+
+  it('never splits a surrogate pair when hard-breaking or truncating emoji', () => {
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (const lines of [wrapTitleForRow('😀😀😀😀', 2, 2), wrapTitleForRow('a 😀😀😀😀😀', 3, 3)]) {
+      for (const l of lines) expect(loneSurrogate.test(l)).toBe(false);
+    }
+  });
 });
 
 describe('formatRowLines', () => {

@@ -230,6 +230,33 @@ describe('close confirmation modal', () => {
     unmount();
   });
 
+  it('shows a 2-line selected row FIRST line when the list pane has a single content line', async () => {
+    const tall: Issue[] = [
+      {
+        id: 'p-wrap',
+        title: 'A rather long title that certainly wraps onto a second line here',
+        status: 'in_progress',
+        created_at: '2',
+        updated_at: '2',
+      },
+      { id: 'p-short', title: 'Short', status: 'open', created_at: '1', updated_at: '1' },
+    ];
+    const store = createIssueStore(async () => tall);
+    // rows=8 → bodyH=6 → listH=3 → one content line; the selected row wraps to 2.
+    const { lastFrame, unmount } = render(
+      <App workspace={workspace} store={store} initialDims={{ columns: 40, rows: 8 }} />,
+    );
+    await settle();
+    const lines = (lastFrame() ?? '').split('\n');
+    const header = lines.findIndex((l) => l.includes('Active Tasks'));
+    const content = lines[header + 1] ?? '';
+    // The row's first line (id + title head) is the visible one — never the
+    // continuation line or a composite with the overflow indicator.
+    expect(content).toContain('p-wrap A rather');
+    expect(content).not.toContain('more…');
+    unmount();
+  });
+
   it('flashes instead of opening the modal for an already-closed issue', async () => {
     const closed: string[] = [];
     const { stdin, lastFrame, unmount } = await renderApp(100, 30, async (id) => {
