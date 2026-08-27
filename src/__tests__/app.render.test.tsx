@@ -63,37 +63,93 @@ async function renderApp(columns: number, rows: number, closeIssue?: (id: string
   return result;
 }
 
-describe('App rendering', () => {
-  it('renders side-by-side panes in a wide terminal (width > 2*height)', async () => {
+describe('App rendering (stacked-only layout)', () => {
+  it('stacks list above detail in a full-right-pane-sized terminal (~110+ cols)', async () => {
     const { lastFrame, unmount } = await renderApp(120, 30);
     const frame = lastFrame() ?? '';
+    const lines = frame.split('\n');
     expect(frame).toContain('┌─ Active Tasks ─'); // label sits on the top border
-    expect(frame).toContain('fake-wip');
+    const listLine = lines.findIndex((l) => l.includes('Working on it'));
+    const detailLine = lines.findIndex((l) => l.includes('ID: fake-wip'));
+    expect(listLine).toBeGreaterThan(-1);
+    expect(detailLine).toBeGreaterThan(listLine); // detail strictly below the list, always
+    // list rows drop the id entirely
+    expect(lines[listLine] ?? '').not.toContain('fake-wip');
+    // priority + assignee render as a bracketed chip on the row
+    expect(lines[listLine] ?? '').toContain('[P1 @jon]');
     expect(frame).not.toContain('fake-done'); // closed hidden by default
-    // side-by-side: detail content starts right of the list pane (40% of 120)
-    const detailRow = frame.split('\n').find((l) => l.includes('ID: fake-wip')) ?? '';
-    expect(detailRow.indexOf('ID: fake-wip')).toBeGreaterThan(40);
-    // both pane top borders share the first row
-    const topRow = frame.split('\n')[0] ?? '';
-    expect(topRow).toContain('┌─ Active Tasks ─');
-    expect(topRow).toContain('┌─ ke-wip ─');
     expect(frame).toContain('fake · server · LOCAL');
     expect(frame).toContain('⚪ open');
     expect(frame).toContain('q:quit');
     unmount();
   });
 
-  it('renders stacked panes in a tall terminal', async () => {
-    const { lastFrame, unmount } = await renderApp(80, 50);
+  it('stays usable stacked at a half-right cmux pane width (~70 cols)', async () => {
+    const { lastFrame, unmount } = await renderApp(70, 40);
     const frame = lastFrame() ?? '';
     const lines = frame.split('\n');
-    const listLine = lines.findIndex((l) => l.includes('⏳ fake-wip'));
+    const listLine = lines.findIndex((l) => l.includes('Working on it'));
     const detailLine = lines.findIndex((l) => l.includes('ID: fake-wip'));
     expect(listLine).toBeGreaterThan(-1);
-    expect(detailLine).toBeGreaterThan(listLine); // detail strictly below the list
-    // stacked: detail content starts at the left edge (inside the border)
-    const detailRow = lines[detailLine] ?? '';
-    expect(detailRow.indexOf('ID: fake-wip')).toBeLessThan(5);
+    expect(detailLine).toBeGreaterThan(listLine); // still stacked, list above detail
+    expect(lines[listLine] ?? '').not.toContain('fake-wip'); // still no id in the row
+    expect(lines[listLine] ?? '').toContain('[P1 @jon]');
+    unmount();
+  });
+
+  it('wraps a long title onto a second row line without repeating the chip', async () => {
+    const longTitleIssues: Issue[] = [
+      {
+        id: 'fake-long',
+        title: 'A rather long title that should need to wrap onto a second line',
+        status: 'open',
+        priority: 1,
+        created_at: '2026-07-03T00:00:00Z',
+        updated_at: '3',
+      },
+    ];
+    const store = createIssueStore(async () => longTitleIssues);
+    await store.refresh();
+    const { lastFrame, unmount } = render(
+      <App
+        workspace={workspace}
+        store={store}
+        createDetector={noopDetector}
+        initialDims={{ columns: 40, rows: 30 }}
+      />,
+    );
+    await settle();
+    const frame = lastFrame() ?? '';
+    const lines = frame.split('\n');
+    const chipLine = lines.findIndex((l) => l.includes('[P1]'));
+    expect(chipLine).toBeGreaterThan(-1);
+    // the wrapped continuation line carries more title text but not another chip
+    const continuationLine = lines[chipLine + 1] ?? '';
+    expect(continuationLine).not.toContain('[P1]');
+    unmount();
+  });
+
+  it('shows an overflow indicator when more rows exist than fit', async () => {
+    const manyIssues: Issue[] = Array.from({ length: 30 }, (_, i) => ({
+      id: `fake-${i}`,
+      title: `Task number ${i}`,
+      status: 'open',
+      created_at: `2026-07-01T00:00:0${i % 10}Z`,
+      updated_at: String(i),
+    }));
+    const store = createIssueStore(async () => manyIssues);
+    await store.refresh();
+    const { lastFrame, unmount } = render(
+      <App
+        workspace={workspace}
+        store={store}
+        createDetector={noopDetector}
+        initialDims={{ columns: 80, rows: 20 }}
+      />,
+    );
+    await settle();
+    const frame = lastFrame() ?? '';
+    expect(frame).toMatch(/\d+ more…/);
     unmount();
   });
 

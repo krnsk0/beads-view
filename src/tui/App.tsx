@@ -7,11 +7,13 @@ import type { Detector } from '../detector';
 import {
   borderTopLine,
   closeModalLines,
+  computeListWindow,
   detailLines,
   displayWidth,
   filterIssues,
-  formatRow,
+  formatRowLines,
   legendText,
+  overflowLine,
   STATUS_HINTS,
   shortId,
   sortIssues,
@@ -139,26 +141,36 @@ export function App({
     [closeIssueOverride, workspace.root, store, showFlash],
   );
 
-  // Layout: side-by-side when width > 2 * height, stacked otherwise.
-  const landscape = columns > rows * 2;
+  // Layout: always stacked (list above detail), full pane width at every
+  // size — genuinely usable from a ~70-col half-right cmux pane up through a
+  // ~110+-col full-right pane. Vertical space favors the list (~60/40); the
+  // detail pane already scrolls, so it can afford the smaller share.
   const bodyH = Math.max(6, rows - 2);
-  const listW = landscape ? Math.floor(columns * 0.4) : columns;
-  const listH = landscape ? bodyH : Math.floor(bodyH * 0.4);
-  const detailW = landscape ? columns - listW : columns;
-  const detailH = landscape ? bodyH : bodyH - listH;
+  const listW = columns;
+  const detailW = columns;
+  const listH = Math.max(3, Math.min(bodyH - 3, Math.round(bodyH * 0.6)));
+  const detailH = bodyH - listH;
 
   // Inner content areas: 1 top-border label row + 1 bottom border row + side cols.
   const listInnerH = Math.max(1, listH - 2);
   const detailInnerH = Math.max(1, detailH - 2);
+  const listInnerW = Math.max(1, listW - 2);
   const detailInnerW = Math.max(1, detailW - 2);
 
-  // Keep the selection inside the visible window of the list.
-  let winStart = windowRef.current;
-  if (selectedIndex < winStart) winStart = selectedIndex;
-  if (selectedIndex >= winStart + listInnerH) winStart = selectedIndex - listInnerH + 1;
-  winStart = Math.max(0, Math.min(winStart, Math.max(0, visible.length - listInnerH)));
+  // Rows can wrap to 2 lines (long titles), so the scroll window is computed
+  // in terminal lines, not issue count, with an "N more" indicator reserved
+  // when rows remain below the window.
+  const rowLines = visible.map((issue) => formatRowLines(issue, byId, listInnerW));
+  const lineCounts = rowLines.map((lines) => lines.length);
+  const { startIndex: winStart, endIndex: winEnd, overflow } = computeListWindow(
+    lineCounts,
+    selectedIndex,
+    listInnerH,
+    windowRef.current,
+  );
   windowRef.current = winStart;
-  const windowIssues = visible.slice(winStart, winStart + listInnerH);
+  const windowIssues = visible.slice(winStart, winEnd);
+  const windowRowLines = rowLines.slice(winStart, winEnd);
 
   const detail = selected ? detailLines(selected, detailInnerW, byId) : null;
   const maxScroll = detail ? Math.max(0, detail.lines.length - detailInnerH) : 0;
@@ -272,18 +284,23 @@ export function App({
         >
           {windowIssues.map((issue, i) => {
             const isSelected = winStart + i === selectedIndex;
-            return (
+            return (windowRowLines[i] ?? []).map((line, li) => (
               <Text
-                key={issue.id}
+                key={`${issue.id}-${li}`}
                 wrap="truncate-end"
                 bold={isSelected}
                 color={isSelected ? 'white' : undefined}
                 backgroundColor={isSelected ? 'blue' : undefined}
               >
-                {formatRow(issue, byId)}
+                {line}
               </Text>
-            );
+            ));
           })}
+          {overflow > 0 && (
+            <Text color="gray" wrap="truncate-end">
+              {overflowLine(overflow)}
+            </Text>
+          )}
         </Box>
       </Box>
       <Box width={detailW} height={detailH} flexDirection="column">
@@ -334,13 +351,11 @@ export function App({
 
   return (
     <Box width={columns} height={rows} flexDirection="column">
-      {modal ?? (landscape ? (
-        <Box height={bodyH}>{panes}</Box>
-      ) : (
+      {modal ?? (
         <Box height={bodyH} flexDirection="column">
           {panes}
         </Box>
-      ))}
+      )}
       <Text backgroundColor="gray" color="black" wrap="truncate-end">
         {fitBar(legendText(showClosed), workspaceInfo, columns)}
       </Text>

@@ -74,21 +74,97 @@ export function filterIssues(issues: Issue[], showClosed: boolean): Issue[] {
   return issues.filter((i) => showClosed || i.status !== 'closed');
 }
 
+/**
+ * Bead titles shouldn't carry a `[project]`-style bracketed prefix (beads are
+ * already per-project; that tag style is reserved for a model distinguishing
+ * sub-initiatives within one project — decision 77). The data migration
+ * strips these at the source; this is a defensive render-time backstop for
+ * anything that slips through.
+ */
+const BRACKET_PREFIX = /^\[[^\]]*\]\s*/;
+
 export function titleOf(issue: Issue): string {
-  return issue.title || '(untitled)';
+  const title = issue.title || '(untitled)';
+  return title.replace(BRACKET_PREFIX, '');
 }
 
 export function isEpic(issue: Issue): boolean {
   return issue.issue_type === 'epic';
 }
 
-/** List row: `<icon> [EPIC ]<id> <title> [P<n>] [@assignee]`. */
-export function formatRow(issue: Issue, byId: Map<string, string>): string {
+/** Compact chip text: priority, plus assignee when present, e.g. "P1", "P1 @jon". */
+export function rowChip(issue: Issue): string {
+  const priority = `P${issue.priority ?? 2}`;
+  return issue.assignee ? `${priority} @${issue.assignee}` : priority;
+}
+
+/**
+ * Greedily fills `width` cells with whole words from `words` (hard-breaking
+ * a single word wider than `width`), returning the fitted line and whatever
+ * words didn't fit.
+ */
+function greedyWrapWords(words: string[], width: number): { line: string; rest: string[] } {
+  const budget = Math.max(1, width);
+  let line = '';
+  let i = 0;
+  for (; i < words.length; i++) {
+    const word = words[i] as string;
+    const candidate = line ? `${line} ${word}` : word;
+    if (displayWidth(candidate) <= budget) {
+      line = candidate;
+      continue;
+    }
+    if (line !== '') break;
+    // The word alone is wider than the budget: hard-break it so we still make progress.
+    let take = word;
+    while (take.length > 1 && displayWidth(take) > budget) take = take.slice(0, -1);
+    const remainder = word.slice(take.length);
+    return { line: take, rest: remainder ? [remainder, ...words.slice(i + 1)] : words.slice(i + 1) };
+  }
+  return { line, rest: words.slice(i) };
+}
+
+/**
+ * Wraps a title into at most 2 lines for a list row: line 1 is narrowed
+ * (to leave room for the trailing chip), line 2 (if needed) gets the full
+ * row width. Text that still doesn't fit in 2 lines is truncated on line 2
+ * with an ellipsis.
+ */
+export function wrapTitleForRow(title: string, firstWidth: number, fullWidth: number): string[] {
+  const words = title.split(/\s+/).filter((w) => w.length > 0);
+  if (words.length === 0) return [''];
+  const first = greedyWrapWords(words, firstWidth);
+  if (first.rest.length === 0) return [first.line];
+  const second = greedyWrapWords(first.rest, fullWidth);
+  if (second.rest.length === 0) return [first.line, second.line];
+  let truncated = second.line;
+  const maxWidth = Math.max(0, fullWidth - 1);
+  while (truncated.length > 0 && displayWidth(truncated) > maxWidth) truncated = truncated.slice(0, -1);
+  return [first.line, `${truncated}…`];
+}
+
+/**
+ * List row lines, pre-wrapped to `width`: `<icon> [EPIC ]<title>` (title
+ * wraps to at most 2 lines) with a compact right-aligned `[priority]` chip
+ * on the first line. Deliberately drops the id (Enter still copies the
+ * selected id; the detail pane still shows it).
+ */
+export function formatRowLines(issue: Issue, byId: Map<string, string>, width: number): string[] {
   const icon = ICONS[bucketOf(issue, byId)];
   const epic = isEpic(issue) ? 'EPIC ' : '';
-  const priority = issue.priority !== undefined ? ` P${issue.priority}` : '';
-  const assignee = issue.assignee ? ` @${issue.assignee}` : '';
-  return `${icon} ${epic}${issue.id} ${titleOf(issue)}${priority}${assignee}`;
+  const prefix = `${icon} ${epic}`;
+  const prefixWidth = displayWidth(prefix);
+  const chip = `[${rowChip(issue)}]`;
+  const chipWidth = displayWidth(chip);
+  const bodyWidth = Math.max(1, width - prefixWidth);
+  const firstWidth = Math.max(1, bodyWidth - chipWidth - 1);
+
+  const titleLines = wrapTitleForRow(titleOf(issue), firstWidth, bodyWidth);
+  const firstLine = titleLines[0] as string;
+  const gap = Math.max(1, bodyWidth - displayWidth(firstLine) - chipWidth);
+  const line1 = `${prefix}${firstLine}${' '.repeat(gap)}${chip}`;
+  if (titleLines.length < 2) return [line1];
+  return [line1, `${' '.repeat(prefixWidth)}${titleLines[1]}`];
 }
 
 /**
@@ -207,4 +283,68 @@ export function closeModalLines(issue: Issue, innerWidth: number): string[] {
     title += '…';
   }
   return [`Close ${issue.id}?`, title, '', 'y: close    n/Esc: cancel'];
+}
+
+export interface ListWindow {
+  /** Index (into the caller's row-line-count array) of the first row to render. */
+  startIndex: number;
+  /** Exclusive end index of the rows to render. */
+  endIndex: number;
+  /** Rows below the window that didn't fit, for an "N more" indicator. */
+  overflow: number;
+}
+
+/**
+ * Picks which rows fit within `maxLines` terminal lines given each row's
+ * rendered line count (rows can wrap to 2 lines), keeping `selectedIndex`
+ * visible and reserving one line for an overflow indicator when rows remain
+ * below the window. Mirrors the old single-line-per-row scroll behavior
+ * (scroll up immediately when the selection moves above the window; scroll
+ * down just enough to reveal it otherwise) generalized to variable row
+ * heights.
+ */
+export function computeListWindow(
+  lineCounts: number[],
+  selectedIndex: number,
+  maxLines: number,
+  prevStart: number,
+): ListWindow {
+  const n = lineCounts.length;
+  if (n === 0) return { startIndex: 0, endIndex: 0, overflow: 0 };
+  const clamp = (v: number) => Math.max(0, Math.min(v, n - 1));
+  const sel = clamp(selectedIndex);
+
+  const fitEnd = (from: number, budget: number): number => {
+    let used = 0;
+    let end = from;
+    while (end < n && used + (lineCounts[end] as number) <= budget) {
+      used += lineCounts[end] as number;
+      end++;
+    }
+    return end;
+  };
+
+  let start = clamp(prevStart);
+  if (sel < start) {
+    start = sel;
+  } else if (sel >= fitEnd(start, maxLines)) {
+    // Scroll down just enough to bring the selection into view.
+    let candidate = start;
+    while (candidate < sel && sel >= fitEnd(candidate, maxLines)) candidate++;
+    start = candidate;
+  }
+
+  let end = fitEnd(start, maxLines);
+  if (end < n) {
+    // Reserve one line for the overflow indicator, but never hide the
+    // selection to make room for it.
+    end = fitEnd(start, Math.max(0, maxLines - 1));
+    if (sel >= end) end = sel + 1;
+  }
+  return { startIndex: start, endIndex: end, overflow: Math.max(0, n - end) };
+}
+
+/** The list's overflow-indicator line, e.g. "  3 more…". */
+export function overflowLine(count: number): string {
+  return `  ${count} more…`;
 }

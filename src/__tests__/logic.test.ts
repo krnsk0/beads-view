@@ -3,16 +3,21 @@ import {
   borderTopLine,
   bucketOf,
   closeModalLines,
+  computeListWindow,
   detailLines,
   displayWidth,
   filterIssues,
-  formatRow,
+  formatRowLines,
   legendText,
+  overflowLine,
+  rowChip,
   shortId,
   snapshotOf,
   sortIssues,
   statusById,
+  titleOf,
   wrapText,
+  wrapTitleForRow,
 } from '../logic';
 import type { Issue } from '../types';
 import { describe, expect, it } from 'bun:test';
@@ -119,21 +124,173 @@ describe('filterIssues', () => {
   });
 });
 
-describe('formatRow', () => {
-  it('formats icon, epic prefix, id, title, priority, assignee', () => {
-    const i = issue({
-      id: 'p-1',
-      title: 'Migrate uploader',
-      status: 'in_progress',
-      issue_type: 'epic',
-      priority: 1,
-      assignee: 'jon',
-    });
-    expect(formatRow(i, new Map())).toBe('⏳ EPIC p-1 Migrate uploader P1 @jon');
+describe('titleOf', () => {
+  it('strips a leading bracketed prefix', () => {
+    expect(titleOf(issue({ id: 'a', title: '[multipart_upload] Fix retry logic' }))).toBe(
+      'Fix retry logic',
+    );
   });
 
-  it('omits missing priority and assignee', () => {
-    expect(formatRow(issue({ id: 'p-2', title: 'T' }), new Map())).toBe('⚪ p-2 T');
+  it('leaves titles with no bracket prefix untouched', () => {
+    expect(titleOf(issue({ id: 'a', title: 'Fix retry logic' }))).toBe('Fix retry logic');
+  });
+
+  it('only strips a single leading prefix, not brackets mid-title', () => {
+    expect(titleOf(issue({ id: 'a', title: '[proj] Handle [edge case]' }))).toBe(
+      'Handle [edge case]',
+    );
+  });
+
+  it('falls back to (untitled) for a missing title', () => {
+    expect(titleOf(issue({ id: 'a' }))).toBe('(untitled)');
+  });
+});
+
+describe('rowChip', () => {
+  it('defaults to P2 with no assignee', () => {
+    expect(rowChip(issue({ id: 'a' }))).toBe('P2');
+  });
+
+  it('includes priority and assignee', () => {
+    expect(rowChip(issue({ id: 'a', priority: 1, assignee: 'jon' }))).toBe('P1 @jon');
+  });
+});
+
+describe('wrapTitleForRow', () => {
+  it('keeps a short title on one line', () => {
+    expect(wrapTitleForRow('Fix uploader', 20, 30)).toEqual(['Fix uploader']);
+  });
+
+  it('wraps onto a second line using the wider full width', () => {
+    const lines = wrapTitleForRow('Fix the uploader retry logic for large files', 15, 30);
+    expect(lines.length).toBe(2);
+    expect(displayWidth(lines[0] ?? '')).toBeLessThanOrEqual(15);
+    expect(displayWidth(lines[1] ?? '')).toBeLessThanOrEqual(30);
+  });
+
+  it('truncates with an ellipsis when the title needs more than 2 lines', () => {
+    const long = 'one two three four five six seven eight nine ten eleven twelve';
+    const lines = wrapTitleForRow(long, 10, 10);
+    expect(lines.length).toBe(2);
+    expect(lines[1]?.endsWith('…')).toBe(true);
+  });
+
+  it('hard-breaks a single word wider than the line', () => {
+    const lines = wrapTitleForRow('supercalifragilisticexpialidocious', 10, 10);
+    expect(lines).toEqual(['supercalif', 'ragilisti…']);
+    for (const l of lines) expect(displayWidth(l)).toBeLessThanOrEqual(10);
+  });
+});
+
+describe('formatRowLines', () => {
+  it('drops the id and leads with the status glyph', () => {
+    const lines = formatRowLines(issue({ id: 'p-secret-id', title: 'Fix uploader' }), new Map(), 40);
+    expect(lines[0]?.startsWith('⚪ ')).toBe(true);
+    expect(lines.join('\n')).not.toContain('p-secret-id');
+  });
+
+  it('strips a bracketed title prefix', () => {
+    const lines = formatRowLines(
+      issue({ id: 'a', title: '[multipart_upload] Fix retry logic' }),
+      new Map(),
+      40,
+    );
+    expect(lines.join(' ')).not.toContain('[multipart_upload]');
+    expect(lines.join(' ')).toContain('Fix retry logic');
+  });
+
+  it('right-aligns the priority chip on the first line at an exact width', () => {
+    const lines = formatRowLines(
+      issue({ id: 'a', title: 'Ship it', priority: 1 }),
+      new Map(),
+      30,
+    );
+    expect(lines).toHaveLength(1);
+    // prefix "⚪ " (3 cols) + "Ship it" (7) + gap + "[P1]" (4) === 30 cols exactly.
+    expect(lines[0]).toBe(`⚪ Ship it${' '.repeat(30 - 3 - 7 - 4)}[P1]`);
+    expect(displayWidth(lines[0] ?? '')).toBe(30);
+  });
+
+  it('combines priority and assignee in the chip', () => {
+    const lines = formatRowLines(
+      issue({ id: 'a', title: 'Ship it', priority: 3, assignee: 'jon' }),
+      new Map(),
+      30,
+    );
+    expect(lines[0]).toBe(`⚪ Ship it${' '.repeat(30 - 3 - 7 - 9)}[P3 @jon]`);
+    expect(displayWidth(lines[0] ?? '')).toBe(30);
+  });
+
+  it('prefixes epics before the title', () => {
+    const lines = formatRowLines(
+      issue({ id: 'a', title: 'Big rollout', issue_type: 'epic' }),
+      new Map(),
+      40,
+    );
+    expect(lines[0]?.includes('EPIC Big rollout')).toBe(true);
+  });
+
+  it('wraps a long title onto a second indented line, chip only on the first', () => {
+    const lines = formatRowLines(
+      issue({ id: 'a', title: 'A rather long title that needs to wrap across two lines' }),
+      new Map(),
+      30,
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('[P2]');
+    expect(lines[1]).not.toContain('[P2]');
+    expect(lines[1]?.startsWith('  ')).toBe(true); // indented under the title, past the icon prefix
+    for (const l of lines) expect(displayWidth(l)).toBeLessThanOrEqual(30);
+  });
+});
+
+describe('overflowLine', () => {
+  it('formats the remaining count', () => {
+    expect(overflowLine(3)).toBe('  3 more…');
+  });
+});
+
+describe('computeListWindow', () => {
+  it('shows everything with no overflow when it all fits', () => {
+    const w = computeListWindow([1, 1, 1], 0, 5, 0);
+    expect(w).toEqual({ startIndex: 0, endIndex: 3, overflow: 0 });
+  });
+
+  it('reserves a line for the overflow indicator when rows remain', () => {
+    // 5 single-line rows, 3 lines of budget -> 2 fit, 1 line reserved for "N more".
+    const w = computeListWindow([1, 1, 1, 1, 1], 0, 3, 0);
+    expect(w).toEqual({ startIndex: 0, endIndex: 2, overflow: 3 });
+  });
+
+  it('scrolls down just enough to reveal a selection below the window', () => {
+    const w = computeListWindow([1, 1, 1, 1, 1], 4, 3, 0);
+    expect(w.endIndex).toBe(5);
+    expect(w.startIndex).toBeLessThanOrEqual(4);
+    expect(4).toBeGreaterThanOrEqual(w.startIndex);
+    expect(4).toBeLessThan(w.endIndex);
+  });
+
+  it('scrolls up immediately when the selection moves above the window', () => {
+    const w = computeListWindow([1, 1, 1, 1, 1], 0, 3, 3);
+    expect(w.startIndex).toBe(0);
+  });
+
+  it('accounts for 2-line rows when fitting the budget', () => {
+    // rows of height [2, 2, 1]; budget 3 -> only the first 2-line row fits before overflow.
+    const w = computeListWindow([2, 2, 1], 0, 3, 0);
+    expect(w.startIndex).toBe(0);
+    expect(w.endIndex).toBe(1);
+    expect(w.overflow).toBe(2);
+  });
+
+  it('never hides the selection even under a very tight budget', () => {
+    const w = computeListWindow([2, 2, 2], 2, 2, 0);
+    expect(2).toBeGreaterThanOrEqual(w.startIndex);
+    expect(2).toBeLessThan(w.endIndex);
+  });
+
+  it('returns an empty window for an empty list', () => {
+    expect(computeListWindow([], 0, 5, 0)).toEqual({ startIndex: 0, endIndex: 0, overflow: 0 });
   });
 });
 
