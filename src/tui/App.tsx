@@ -145,25 +145,30 @@ export function App({
 
   // Layout: always stacked (list above detail), full pane width at every
   // size — genuinely usable from a ~70-col half-right cmux pane up through a
-  // ~110+-col full-right pane. Vertical space favors the list (~60/40); the
-  // detail pane already scrolls, so it can afford the smaller share.
+  // ~110+-col full-right pane.
   const bodyH = Math.max(6, rows - 2);
   const listW = columns;
   const detailW = columns;
-  const listH = Math.max(3, Math.min(bodyH - 3, Math.round(bodyH * 0.6)));
+  const listInnerW = Math.max(1, listW - 2);
+  const detailInnerW = Math.max(1, detailW - 2);
+
+  // Rows can wrap to 2 lines (long titles), so all vertical math — the split
+  // below and the scroll window — works in terminal lines, not issue count.
+  const rowLines = visible.map((issue) => formatRowLines(issue, byId, listInnerW));
+  const lineCounts = rowLines.map((lines) => lines.length);
+  const totalRowLines = lineCounts.reduce((sum, n) => sum + n, 0);
+
+  // Vertical split: the list gets what its rows need, capped at ~60% of the
+  // body — a short queue must not pin the detail pane under a mostly-empty
+  // list. The detail pane absorbs whatever the list gives back; it scrolls,
+  // so the cap costs it nothing when the queue is long.
+  const listContentH = Math.max(1, totalRowLines) + 2; // + top/bottom border rows
+  const listH = Math.max(3, Math.min(bodyH - 3, Math.round(bodyH * 0.6), listContentH));
   const detailH = bodyH - listH;
 
   // Inner content areas: 1 top-border label row + 1 bottom border row + side cols.
   const listInnerH = Math.max(1, listH - 2);
   const detailInnerH = Math.max(1, detailH - 2);
-  const listInnerW = Math.max(1, listW - 2);
-  const detailInnerW = Math.max(1, detailW - 2);
-
-  // Rows can wrap to 2 lines (long titles), so the scroll window is computed
-  // in terminal lines, not issue count, with an "N more" indicator reserved
-  // when rows remain below the window.
-  const rowLines = visible.map((issue) => formatRowLines(issue, byId, listInnerW));
-  const lineCounts = rowLines.map((lines) => lines.length);
   const { startIndex: winStart, endIndex: winEnd, overflow } = computeListWindow(
     lineCounts,
     selectedIndex,

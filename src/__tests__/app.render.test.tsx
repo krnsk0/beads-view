@@ -155,6 +155,49 @@ describe('App rendering (stacked-only layout)', () => {
     unmount();
   });
 
+  it('shrinks the list pane to its rows so a short queue feeds the detail pane', async () => {
+    const { lastFrame, unmount } = await renderApp(80, 40);
+    const frame = lastFrame() ?? '';
+    const lines = frame.split('\n');
+    // Two visible one-line rows + the two border rows: the list closes at
+    // line 3 and the detail pane starts right under it, instead of the list
+    // holding a fixed ~60% share of a 40-row terminal around 2 rows of tasks.
+    expect(lines[3] ?? '').toContain('└');
+    const detailLine = lines.findIndex((l) => l.includes('ID: fake-wip'));
+    expect(detailLine).toBeGreaterThan(3);
+    expect(detailLine).toBeLessThan(12);
+    unmount();
+  });
+
+  it('still caps the list at ~60% of the body when the queue is long', async () => {
+    const manyIssues: Issue[] = Array.from({ length: 30 }, (_, i) => ({
+      id: `fake-${i}`,
+      title: `Task number ${i}`,
+      status: 'open',
+      created_at: `2026-07-01T00:00:0${i % 10}Z`,
+      updated_at: String(i),
+    }));
+    const store = createIssueStore(async () => manyIssues);
+    await store.refresh();
+    const { lastFrame, unmount } = render(
+      <App
+        workspace={workspace}
+        store={store}
+        createDetector={noopDetector}
+        initialDims={{ columns: 80, rows: 30 }}
+      />,
+    );
+    await settle();
+    const frame = lastFrame() ?? '';
+    const lines = frame.split('\n');
+    // bodyH = 28, so the list may take at most round(28 * 0.6) = 17 rows;
+    // the detail pane must still get its share below.
+    const detailLine = lines.findIndex((l) => l.includes('ID: fake-'));
+    expect(detailLine).toBeGreaterThan(16);
+    expect(frame).toMatch(/\d+ more…/);
+    unmount();
+  });
+
   it('shows the detail pane fields for the selected (first) issue', async () => {
     const { lastFrame, unmount } = await renderApp(120, 40);
     const frame = lastFrame() ?? '';
