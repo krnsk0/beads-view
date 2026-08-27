@@ -11,6 +11,7 @@ import {
   legendText,
   overflowLine,
   rowChip,
+  rowLineText,
   shortId,
   snapshotOf,
   sortIssues,
@@ -183,10 +184,16 @@ describe('wrapTitleForRow', () => {
 });
 
 describe('formatRowLines', () => {
-  it('drops the id and leads with the status glyph', () => {
+  it('shows the id, dimmed, right after the status glyph and before the title', () => {
     const lines = formatRowLines(issue({ id: 'p-secret-id', title: 'Fix uploader' }), new Map(), 40);
-    expect(lines[0]?.startsWith('⚪ ')).toBe(true);
-    expect(lines.join('\n')).not.toContain('p-secret-id');
+    expect(lines).toHaveLength(1);
+    const [iconSeg, idSeg, restSeg] = lines[0]?.segments ?? [];
+    expect(iconSeg?.text).toBe('⚪ ');
+    expect(iconSeg?.dim).toBeFalsy();
+    expect(idSeg?.text).toBe('p-secret-id ');
+    expect(idSeg?.dim).toBe(true);
+    expect(restSeg?.text.startsWith('Fix uploader')).toBe(true);
+    expect(rowLineText(lines[0]!).startsWith('⚪ p-secret-id Fix uploader')).toBe(true);
   });
 
   it('strips a bracketed title prefix', () => {
@@ -195,8 +202,9 @@ describe('formatRowLines', () => {
       new Map(),
       40,
     );
-    expect(lines.join(' ')).not.toContain('[multipart_upload]');
-    expect(lines.join(' ')).toContain('Fix retry logic');
+    const text = lines.map(rowLineText).join(' ');
+    expect(text).not.toContain('[multipart_upload]');
+    expect(text).toContain('Fix retry logic');
   });
 
   it('right-aligns the priority chip on the first line at an exact width', () => {
@@ -206,9 +214,9 @@ describe('formatRowLines', () => {
       30,
     );
     expect(lines).toHaveLength(1);
-    // prefix "⚪ " (3 cols) + "Ship it" (7) + gap + "[P1]" (4) === 30 cols exactly.
-    expect(lines[0]).toBe(`⚪ Ship it${' '.repeat(30 - 3 - 7 - 4)}[P1]`);
-    expect(displayWidth(lines[0] ?? '')).toBe(30);
+    // prefix "⚪ " (3 cols) + id "a " (2) + "Ship it" (7) + gap + "[P1]" (4) === 30 cols exactly.
+    expect(rowLineText(lines[0]!)).toBe(`⚪ a Ship it${' '.repeat(30 - 3 - 2 - 7 - 4)}[P1]`);
+    expect(displayWidth(rowLineText(lines[0]!))).toBe(30);
   });
 
   it('combines priority and assignee in the chip', () => {
@@ -217,30 +225,44 @@ describe('formatRowLines', () => {
       new Map(),
       30,
     );
-    expect(lines[0]).toBe(`⚪ Ship it${' '.repeat(30 - 3 - 7 - 9)}[P3 @jon]`);
-    expect(displayWidth(lines[0] ?? '')).toBe(30);
+    expect(rowLineText(lines[0]!)).toBe(`⚪ a Ship it${' '.repeat(30 - 3 - 2 - 7 - 9)}[P3 @jon]`);
+    expect(displayWidth(rowLineText(lines[0]!))).toBe(30);
   });
 
-  it('prefixes epics before the title', () => {
+  it('orders icon, epic tag, id, then title', () => {
     const lines = formatRowLines(
       issue({ id: 'a', title: 'Big rollout', issue_type: 'epic' }),
       new Map(),
       40,
     );
-    expect(lines[0]?.includes('EPIC Big rollout')).toBe(true);
+    expect(rowLineText(lines[0]!)).toContain('EPIC a Big rollout');
   });
 
-  it('wraps a long title onto a second indented line, chip only on the first', () => {
+  it('wraps a long title onto a second indented line, chip and id only on the first', () => {
     const lines = formatRowLines(
       issue({ id: 'a', title: 'A rather long title that needs to wrap across two lines' }),
       new Map(),
       30,
     );
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain('[P2]');
-    expect(lines[1]).not.toContain('[P2]');
-    expect(lines[1]?.startsWith('  ')).toBe(true); // indented under the title, past the icon prefix
-    for (const l of lines) expect(displayWidth(l)).toBeLessThanOrEqual(30);
+    expect(rowLineText(lines[0]!)).toContain('[P2]');
+    expect(rowLineText(lines[0]!)).toContain('a ');
+    const second = rowLineText(lines[1]!);
+    expect(second).not.toContain('[P2]');
+    expect(second).not.toMatch(/^\s*a /); // id doesn't repeat on the continuation line
+    expect(second.startsWith('  ')).toBe(true); // indented past the icon+id prefix
+    for (const l of lines) expect(displayWidth(rowLineText(l))).toBeLessThanOrEqual(30);
+  });
+
+  it('reduces the title budget to make room for a longer id', () => {
+    const shortId = formatRowLines(issue({ id: 'x', title: 'A title that is somewhat long' }), new Map(), 40);
+    const longId = formatRowLines(
+      issue({ id: 'project_name-0123456789', title: 'A title that is somewhat long' }),
+      new Map(),
+      40,
+    );
+    // Same title, wider id -> less room for title text before it has to wrap.
+    expect(longId.length).toBeGreaterThanOrEqual(shortId.length);
   });
 });
 

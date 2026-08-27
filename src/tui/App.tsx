@@ -292,7 +292,15 @@ export function App({
                 color={isSelected ? 'white' : undefined}
                 backgroundColor={isSelected ? 'blue' : undefined}
               >
-                {line}
+                {line.segments.map((seg, si) =>
+                  seg.dim ? (
+                    <Text key={si} dimColor>
+                      {seg.text}
+                    </Text>
+                  ) : (
+                    seg.text
+                  ),
+                )}
               </Text>
             ));
           })}

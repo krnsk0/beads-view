@@ -143,28 +143,53 @@ export function wrapTitleForRow(title: string, firstWidth: number, fullWidth: nu
   return [first.line, `${truncated}…`];
 }
 
+/** A run of row text; `dim` marks the id span so the title still dominates visually. */
+export interface RowSegment {
+  text: string;
+  dim?: boolean;
+}
+
+export interface RowLine {
+  segments: RowSegment[];
+}
+
+/** Flattens a row line's segments to plain text (for tests and width math). */
+export function rowLineText(line: RowLine): string {
+  return line.segments.map((s) => s.text).join('');
+}
+
 /**
- * List row lines, pre-wrapped to `width`: `<icon> [EPIC ]<title>` (title
- * wraps to at most 2 lines) with a compact right-aligned `[priority]` chip
- * on the first line. Deliberately drops the id (Enter still copies the
- * selected id; the detail pane still shows it).
+ * List row lines, pre-wrapped to `width`: `<icon> [EPIC ]<id> <title>` (title
+ * wraps to at most 2 lines) with a compact right-aligned `[priority]` chip on
+ * the first line. The id renders dim (a segment flagged `dim: true`) so the
+ * title still dominates, but stays visible since models refer to beads by
+ * id. Wrapped continuation lines are plain and indent past the id so title
+ * text stays aligned.
  */
-export function formatRowLines(issue: Issue, byId: Map<string, string>, width: number): string[] {
+export function formatRowLines(issue: Issue, byId: Map<string, string>, width: number): RowLine[] {
   const icon = ICONS[bucketOf(issue, byId)];
   const epic = isEpic(issue) ? 'EPIC ' : '';
   const prefix = `${icon} ${epic}`;
-  const prefixWidth = displayWidth(prefix);
+  const idSeg = `${issue.id} `;
+  const indentWidth = displayWidth(prefix) + displayWidth(idSeg);
   const chip = `[${rowChip(issue)}]`;
   const chipWidth = displayWidth(chip);
-  const bodyWidth = Math.max(1, width - prefixWidth);
+  const bodyWidth = Math.max(1, width - indentWidth);
   const firstWidth = Math.max(1, bodyWidth - chipWidth - 1);
 
   const titleLines = wrapTitleForRow(titleOf(issue), firstWidth, bodyWidth);
   const firstLine = titleLines[0] as string;
   const gap = Math.max(1, bodyWidth - displayWidth(firstLine) - chipWidth);
-  const line1 = `${prefix}${firstLine}${' '.repeat(gap)}${chip}`;
+  const line1: RowLine = {
+    segments: [
+      { text: prefix },
+      { text: idSeg, dim: true },
+      { text: `${firstLine}${' '.repeat(gap)}${chip}` },
+    ],
+  };
   if (titleLines.length < 2) return [line1];
-  return [line1, `${' '.repeat(prefixWidth)}${titleLines[1]}`];
+  const line2: RowLine = { segments: [{ text: `${' '.repeat(indentWidth)}${titleLines[1]}` }] };
+  return [line1, line2];
 }
 
 /**

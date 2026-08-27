@@ -73,8 +73,8 @@ describe('App rendering (stacked-only layout)', () => {
     const detailLine = lines.findIndex((l) => l.includes('ID: fake-wip'));
     expect(listLine).toBeGreaterThan(-1);
     expect(detailLine).toBeGreaterThan(listLine); // detail strictly below the list, always
-    // list rows drop the id entirely
-    expect(lines[listLine] ?? '').not.toContain('fake-wip');
+    // the id shows (dim) at the start of the row, right after the status glyph
+    expect(lines[listLine] ?? '').toContain('⏳ fake-wip Working on it');
     // priority + assignee render as a bracketed chip on the row
     expect(lines[listLine] ?? '').toContain('[P1 @jon]');
     expect(frame).not.toContain('fake-done'); // closed hidden by default
@@ -92,7 +92,7 @@ describe('App rendering (stacked-only layout)', () => {
     const detailLine = lines.findIndex((l) => l.includes('ID: fake-wip'));
     expect(listLine).toBeGreaterThan(-1);
     expect(detailLine).toBeGreaterThan(listLine); // still stacked, list above detail
-    expect(lines[listLine] ?? '').not.toContain('fake-wip'); // still no id in the row
+    expect(lines[listLine] ?? '').toContain('⏳ fake-wip Working on it'); // id still visible, narrow pane too
     expect(lines[listLine] ?? '').toContain('[P1 @jon]');
     unmount();
   });
@@ -123,9 +123,11 @@ describe('App rendering (stacked-only layout)', () => {
     const lines = frame.split('\n');
     const chipLine = lines.findIndex((l) => l.includes('[P1]'));
     expect(chipLine).toBeGreaterThan(-1);
-    // the wrapped continuation line carries more title text but not another chip
+    expect(lines[chipLine] ?? '').toContain('fake-long'); // id shows on the first line
+    // the wrapped continuation line carries more title text but not another chip or id
     const continuationLine = lines[chipLine + 1] ?? '';
     expect(continuationLine).not.toContain('[P1]');
+    expect(continuationLine).not.toContain('fake-long');
     unmount();
   });
 
