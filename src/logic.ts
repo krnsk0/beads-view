@@ -4,6 +4,8 @@ export const ICONS: Record<Bucket, string> = {
   open: '⚪',
   in_progress: '⏳',
   blocked: '⛔',
+  unknown: '?',
+  deferred: '❄',
   closed: '✅',
 };
 
@@ -11,8 +13,18 @@ const BUCKET_RANK: Record<Bucket, number> = {
   in_progress: 0,
   open: 1,
   blocked: 2,
-  closed: 3,
+  unknown: 3,
+  deferred: 4,
+  closed: 5,
 };
+
+/** Date-free deferral stays in backlog until promoted; closed always stays closed. */
+export function isBacklog(issue: Issue, now = Date.now()): boolean {
+  return issue.status !== 'closed' && (
+    issue.status === 'deferred' ||
+    Boolean(issue.defer_until && Date.parse(issue.defer_until) > now)
+  );
+}
 
 /**
  * Dependency ids that actually block this issue: non-parent-child edges whose
@@ -29,15 +41,18 @@ export function blockingDeps(issue: Issue, statusById: Map<string, string>): str
 
 /**
  * Classify an issue into the bucket that drives icons, sorting, and the
- * legend. "blocked" covers both explicit status=blocked and open issues with
+ * legend. Backlog takes precedence over active statuses. "blocked" covers
+ * both explicit status=blocked and open issues with
  * unresolved blocking dependencies. in_progress with dependencies still
  * counts as in_progress. When the dependencies array is absent, falls back to
  * dependency_count (older bd schemas).
  */
-export function bucketOf(issue: Issue, statusById: Map<string, string>): Bucket {
+export function bucketOf(issue: Issue, statusById: Map<string, string>, now = Date.now()): Bucket {
   if (issue.status === 'closed') return 'closed';
+  if (isBacklog(issue, now)) return 'deferred';
   if (issue.status === 'blocked') return 'blocked';
   if (issue.status === 'in_progress') return 'in_progress';
+  if (issue.status !== 'open') return 'unknown';
   if (issue.dependencies) {
     if (blockingDeps(issue, statusById).length > 0) return 'blocked';
   } else if ((issue.dependency_count ?? 0) > 0) {
@@ -51,16 +66,19 @@ export function statusById(issues: Issue[]): Map<string, string> {
 }
 
 /**
- * Sort for display: in_progress, then open (ready), then blocked, then
- * closed; newest-first (created_at desc) within each bucket.
+ * Sort the full issue set before filtering so hidden dependencies still block.
+ * Buckets follow roadmap order, then unknown, backlog, closed. Priority wins
+ * within each bucket, followed by newest creation time and stable input order.
  */
-export function sortIssues(issues: Issue[]): Issue[] {
+export function sortIssues(issues: Issue[], now = Date.now()): Issue[] {
   const byId = statusById(issues);
   return issues
     .map((issue, idx) => ({ issue, idx }))
     .sort((a, b) => {
-      const rank = BUCKET_RANK[bucketOf(a.issue, byId)] - BUCKET_RANK[bucketOf(b.issue, byId)];
+      const rank = BUCKET_RANK[bucketOf(a.issue, byId, now)] - BUCKET_RANK[bucketOf(b.issue, byId, now)];
       if (rank !== 0) return rank;
+      const priority = (a.issue.priority ?? 2) - (b.issue.priority ?? 2);
+      if (priority !== 0) return priority;
       const at = a.issue.created_at ?? '';
       const bt = b.issue.created_at ?? '';
       if (at !== bt) return at > bt ? -1 : 1;
@@ -69,9 +87,14 @@ export function sortIssues(issues: Issue[]): Issue[] {
     .map(({ issue }) => issue);
 }
 
-/** Client-side filter: show/hide closed issues. */
-export function filterIssues(issues: Issue[], showClosed: boolean): Issue[] {
-  return issues.filter((i) => showClosed || i.status !== 'closed');
+/** Independent closed/backlog filters never change the underlying task status. */
+export function filterIssues(
+  issues: Issue[],
+  showClosed: boolean,
+  showBacklog = false,
+  now = Date.now(),
+): Issue[] {
+  return issues.filter((i) => i.status === 'closed' ? showClosed : showBacklog || !isBacklog(i, now));
 }
 
 /**
@@ -304,12 +327,13 @@ export function shortId(id: string): string {
   return id.slice(-6);
 }
 
-export function legendText(showClosed: boolean): string {
-  return ' ⚪ open  ⏳ in progress  ⛔ blocked' + (showClosed ? '  ✅ closed' : '');
+export function legendText(showClosed: boolean, showBacklog = false): string {
+  return ' ⚪ open  ⏳ in progress  ⛔ blocked' +
+    (showBacklog ? '  ❄ backlog' : '') + (showClosed ? '  ✅ closed' : '');
 }
 
 export const STATUS_HINTS =
-  ' ↑↓/jk:nav | Enter:copy id | c:close | Tab:focus | a:closed | r:refresh | q:quit';
+  ' b:backlog | a:closed | q:quit | ↑↓/jk:nav | Enter:copy id | c:close | Tab:focus | r:refresh';
 
 /** Terminal display width (emoji render 2 cells wide; string length lies). */
 export function displayWidth(s: string): number {

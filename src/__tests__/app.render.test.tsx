@@ -46,8 +46,13 @@ const noopDetector = () => ({ stop() {} });
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
-async function renderApp(columns: number, rows: number, closeIssue?: (id: string) => Promise<void>) {
-  const store = createIssueStore(async () => issues);
+async function renderApp(
+  columns: number,
+  rows: number,
+  closeIssue?: (id: string) => Promise<void>,
+  sourceIssues: Issue[] = issues,
+) {
+  const store = createIssueStore(async () => sourceIssues);
   await store.refresh();
   const result = render(
     <App
@@ -68,7 +73,7 @@ describe('App rendering (stacked-only layout)', () => {
     const { lastFrame, unmount } = await renderApp(120, 30);
     const frame = lastFrame() ?? '';
     const lines = frame.split('\n');
-    expect(frame).toContain('┌─ Active Tasks ─'); // label sits on the top border
+    expect(frame).toContain('┌─ Roadmap ─'); // label sits on the top border
     const listLine = lines.findIndex((l) => l.includes('Working on it'));
     const detailLine = lines.findIndex((l) => l.includes('ID: fake-wip'));
     expect(listLine).toBeGreaterThan(-1);
@@ -218,7 +223,7 @@ describe('close confirmation modal', () => {
     expect(frame).toContain('Close fake-wip?');
     expect(frame).toContain('Working on it');
     expect(frame).toContain('y: close    n/Esc: cancel');
-    expect(frame).not.toContain('Active Tasks'); // body swapped out
+    expect(frame).not.toContain('Roadmap'); // body swapped out
     unmount();
   });
 
@@ -266,7 +271,7 @@ describe('close confirmation modal', () => {
       await settle();
       const frame = lastFrame() ?? '';
       expect(frame).not.toContain('Close fake-wip?');
-      expect(frame).toContain('Active Tasks'); // body restored
+      expect(frame).toContain('Roadmap'); // body restored
       expect(frame).toContain('ID: fake-wip'); // selection unchanged
     }
     expect(closed).toEqual([]);
@@ -291,7 +296,7 @@ describe('close confirmation modal', () => {
     );
     await settle();
     const lines = (lastFrame() ?? '').split('\n');
-    const header = lines.findIndex((l) => l.includes('Active Tasks'));
+    const header = lines.findIndex((l) => l.includes('Roadmap'));
     const content = lines[header + 1] ?? '';
     // The row's first line (id + title head) is the visible one — never the
     // continuation line or a composite with the overflow indicator.
@@ -318,5 +323,130 @@ describe('close confirmation modal', () => {
     expect(frame).not.toContain('Close fake-done?');
     expect(closed).toEqual([]);
     unmount();
+  });
+});
+
+
+describe('roadmap visibility controls', () => {
+  const all: Issue[] = [
+    ...issues,
+    { id: 'fake-backlog', title: 'Candidate idea', status: 'deferred', description: Array.from({ length: 40 }, (_, n) => `Backlog detail line ${n}`).join('\n') },
+  ];
+
+  it('toggles backlog and closed independently without closing or editing issues', async () => {
+    const original = structuredClone(all);
+    const closed: string[] = [];
+    const { stdin, lastFrame, unmount } = await renderApp(100, 40, async (id) => { closed.push(id); }, all);
+    try {
+      expect(lastFrame() ?? '').toContain('┌─ Roadmap ─');
+      expect(lastFrame() ?? '').not.toContain('fake-backlog');
+      expect(lastFrame() ?? '').not.toContain('fake-done');
+      stdin.write('b');
+      await settle();
+      expect(lastFrame() ?? '').toContain('Roadmap + backlog');
+      expect(lastFrame() ?? '').toContain('❄ fake-backlog');
+      expect(lastFrame() ?? '').not.toContain('fake-done');
+      stdin.write('a');
+      await settle();
+      expect(lastFrame() ?? '').toContain('Roadmap + backlog + closed');
+      expect(lastFrame() ?? '').toContain('fake-done');
+      stdin.write('b');
+      await settle();
+      expect(lastFrame() ?? '').toContain('Roadmap + closed');
+      expect(lastFrame() ?? '').not.toContain('fake-backlog');
+      expect(lastFrame() ?? '').toContain('fake-done');
+      stdin.write('a');
+      await settle();
+      expect(lastFrame() ?? '').toContain('┌─ Roadmap ─');
+      expect(closed).toEqual([]);
+      expect(all).toEqual(original);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('shows both controls on an empty narrow roadmap and returns to hidden defaults on launch', async () => {
+    for (let launch = 0; launch < 2; launch++) {
+      const { stdin, lastFrame, unmount } = await renderApp(40, 20, undefined, [all[3]!]);
+      try {
+        expect(lastFrame() ?? '').toContain('b:backlog | a:closed | q:quit');
+        expect(lastFrame() ?? '').not.toContain('fake-backlog');
+        stdin.write('b');
+        await settle();
+        expect(lastFrame() ?? '').toContain('fake-backlog');
+        expect(lastFrame() ?? '').toContain('Roadmap + backlog');
+        stdin.write('b');
+        await settle();
+        expect(lastFrame() ?? '').not.toContain('fake-backlog');
+        expect(lastFrame() ?? '').toContain('b:backlog | a:closed | q:quit');
+        stdin.write('b');
+        await settle();
+      } finally {
+        unmount();
+      }
+    }
+  });
+
+  it('preserves the selected ID when hiding preceding rows changes its index', async () => {
+    const { stdin, lastFrame, unmount } = await renderApp(100, 40, undefined, all);
+    try {
+      for (const key of ['a', 'j', 'j']) {
+        stdin.write(key);
+        await settle();
+      }
+      expect(lastFrame() ?? '').toContain('ID: fake-done');
+      for (const key of ['b', 'b']) {
+        stdin.write(key);
+        await settle();
+        expect(lastFrame() ?? '').toContain('ID: fake-done');
+      }
+    } finally {
+      unmount();
+    }
+  });
+
+  it('falls back to the nearest remaining row and resets scrolled details when selection is hidden', async () => {
+    const { stdin, lastFrame, unmount } = await renderApp(100, 22, undefined, all);
+    try {
+      for (const key of ['b', 'a', 'j', 'j']) {
+        stdin.write(key);
+        await settle();
+      }
+      expect(lastFrame() ?? '').toContain('ID: fake-backlog');
+      stdin.write('\t');
+      await settle();
+      for (let n = 0; n < 6; n++) {
+        stdin.write('j');
+        await settle();
+      }
+      expect(lastFrame() ?? '').not.toContain('ID: fake-backlog');
+      stdin.write('b');
+      await settle();
+      expect(lastFrame() ?? '').toContain('ID: fake-done');
+      expect(lastFrame() ?? '').toContain('Status: closed');
+      expect(lastFrame() ?? '').not.toContain('Backlog detail line');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('shows hidden dependencies correctly and preserves unknown statuses in details', async () => {
+    const fixtures: Issue[] = [
+      { id: 'fake-unknown', title: 'Custom state', status: 'awaiting_review' },
+      { id: 'fake-child', title: 'Blocked child', status: 'open', dependencies: [{ issue_id: 'fake-child', depends_on_id: 'fake-hidden', type: 'blocks' }] },
+      { id: 'fake-hidden', title: 'Hidden candidate', status: 'deferred' },
+    ];
+    const { stdin, lastFrame, unmount } = await renderApp(100, 30, undefined, fixtures);
+    try {
+      expect(lastFrame() ?? '').toContain('⛔ fake-child');
+      expect(lastFrame() ?? '').toContain('Blocked by: fake-hidden');
+      expect(lastFrame() ?? '').not.toContain('Hidden candidate');
+      stdin.write('j');
+      await settle();
+      expect(lastFrame() ?? '').toContain('? fake-unknown');
+      expect(lastFrame() ?? '').toContain('Status: awaiting_review');
+    } finally {
+      unmount();
+    }
   });
 });

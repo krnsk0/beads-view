@@ -18,12 +18,13 @@ export interface Issue {
   labels?: string[];
   created_at?: string;
   updated_at?: string;
+  defer_until?: string;
   dependencies?: Dependency[];
   dependency_count?: number;
   /** Computed by bd from the parent-child dependency. */
   parent?: string;
 }
 
-export type Bucket = 'open' | 'in_progress' | 'blocked' | 'closed';
+export type Bucket = 'open' | 'in_progress' | 'blocked' | 'unknown' | 'deferred' | 'closed';
 
 export type LiveStatus = 'sql' | 'poll' | 'manual';

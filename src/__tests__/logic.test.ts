@@ -8,6 +8,7 @@ import {
   displayWidth,
   filterIssues,
   formatRowLines,
+  isBacklog,
   legendText,
   overflowLine,
   rowChip,
@@ -450,5 +451,100 @@ describe('borderTopLine', () => {
 
   it('degrades to plain dashes below the minimum width', () => {
     expect(borderTopLine(' X ', 3)).toBe('───');
+  });
+});
+
+
+describe('roadmap and backlog classification', () => {
+  const now = Date.parse('2026-09-17T12:00:00Z');
+  const future = '2026-09-18T00:00:00Z';
+
+  it('keeps indefinite deferred issues in backlog even with an expired or invalid date', () => {
+    for (const defer_until of [undefined, '', 'invalid', '2020-01-01T00:00:00Z']) {
+      const candidate = issue({ id: 'candidate', status: 'deferred', defer_until });
+      expect(isBacklog(candidate, now)).toBe(true);
+      expect(bucketOf(candidate, new Map(), now)).toBe('deferred');
+    }
+  });
+
+  it('treats future deferrals as backlog regardless of nonclosed execution status', () => {
+    for (const status of ['open', 'in_progress', 'blocked', 'custom']) {
+      const candidate = issue({ id: 'later', status, defer_until: future, dependency_count: 1 });
+      expect(isBacklog(candidate, now)).toBe(true);
+      expect(bucketOf(candidate, new Map(), now)).toBe('deferred');
+    }
+    const closed = issue({ id: 'done', status: 'closed', defer_until: future });
+    expect(isBacklog(closed, now)).toBe(false);
+    expect(bucketOf(closed, new Map(), now)).toBe('closed');
+  });
+
+  it('does not hide open issues with absent, invalid, expired, or exactly current dates', () => {
+    for (const defer_until of [undefined, '', 'invalid', '2020-01-01T00:00:00Z', new Date(now).toISOString()]) {
+      expect(isBacklog(issue({ id: 'ready', defer_until }), now)).toBe(false);
+    }
+  });
+
+  it('keeps hidden blockers and deferred parents in the full dependency map', () => {
+    const all = [
+      issue({ id: 'blocked', dependencies: [dep('blocked', 'candidate')] }),
+      issue({ id: 'child', dependencies: [dep('child', 'candidate', 'parent-child')] }),
+      issue({ id: 'ready', dependencies: [dep('ready', 'done')] }),
+      issue({ id: 'candidate', status: 'deferred' }),
+      issue({ id: 'done', status: 'closed' }),
+    ];
+    const byId = statusById(all);
+    const visible = filterIssues(sortIssues(all, now), false, false, now);
+    expect(visible.map((i) => i.id)).toEqual(['child', 'ready', 'blocked']);
+    expect(blockingDeps(all[0]!, byId)).toEqual(['candidate']);
+    expect(bucketOf(all[1]!, byId, now)).toBe('open');
+    expect(bucketOf(all[2]!, byId, now)).toBe('open');
+  });
+
+  it('keeps custom statuses unknown even when they have blockers', () => {
+    const custom = issue({ id: 'custom', status: 'awaiting_review', dependency_count: 1 });
+    expect(bucketOf(custom, new Map(), now)).toBe('unknown');
+    expect(rowLineText(formatRowLines(custom, new Map(), 60)[0]!)).toContain('?');
+    expect(detailLines(custom, 60, new Map()).lines).toContain('Status: awaiting_review');
+  });
+
+  it('filters backlog and closed independently without changing stored issues', () => {
+    const all = [
+      issue({ id: 'ready' }),
+      issue({ id: 'candidate', status: 'deferred' }),
+      issue({ id: 'later', defer_until: future }),
+      issue({ id: 'done', status: 'closed', defer_until: future }),
+    ];
+    const original = structuredClone(all);
+    expect(filterIssues(all, false, false, now).map((i) => i.id)).toEqual(['ready']);
+    expect(filterIssues(all, false, true, now).map((i) => i.id)).toEqual(['ready', 'candidate', 'later']);
+    expect(filterIssues(all, true, false, now).map((i) => i.id)).toEqual(['ready', 'done']);
+    expect(filterIssues(all, true, true, now).map((i) => i.id)).toEqual(['ready', 'candidate', 'later', 'done']);
+    expect(all).toEqual(original);
+  });
+
+  it('sorts status groups before priority, then newest first, with stable exact ties', () => {
+    const all = [
+      issue({ id: 'closed', status: 'closed', priority: 0 }),
+      issue({ id: 'deferred', status: 'deferred', priority: 0 }),
+      issue({ id: 'unknown', status: 'custom', priority: 0 }),
+      issue({ id: 'blocked', status: 'blocked', priority: 0 }),
+      issue({ id: 'default-old', created_at: '2026-01-01T00:00:00Z' }),
+      issue({ id: 'tie-first', priority: 2, created_at: '2026-05-01T00:00:00Z' }),
+      issue({ id: 'tie-second', created_at: '2026-05-01T00:00:00Z' }),
+      issue({ id: 'urgent-old', priority: 0, created_at: '2020-01-01T00:00:00Z' }),
+      issue({ id: 'wip', status: 'in_progress', priority: 4 }),
+    ];
+    const original = structuredClone(all);
+    expect(sortIssues(all, now).map((i) => i.id)).toEqual([
+      'wip', 'urgent-old', 'tie-first', 'tie-second', 'default-old',
+      'blocked', 'unknown', 'deferred', 'closed',
+    ]);
+    expect(all).toEqual(original);
+  });
+
+  it('includes the deferred legend only when backlog is visible', () => {
+    expect(legendText(false, false)).not.toContain('❄');
+    expect(legendText(false, true)).toContain('❄');
+    expect(legendText(true, true)).toContain('✅ closed');
   });
 });

@@ -78,6 +78,7 @@ export function App({
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
 
   const [showClosed, setShowClosed] = useState(false);
+  const [showBacklog, setShowBacklog] = useState(false);
   const [focus, setFocus] = useState<Pane>('list');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailScroll, setDetailScroll] = useState(0);
@@ -97,7 +98,8 @@ export function App({
   }, [store, createDetector]);
 
   const byId = statusById(state.issues);
-  const visible = filterIssues(sortIssues(state.issues), showClosed);
+  const now = Date.now();
+  const visible = filterIssues(sortIssues(state.issues, now), showClosed, showBacklog, now);
 
   // Selection: follow the selected id across refreshes; fall back to the last
   // index (clamped) when it disappears.
@@ -238,6 +240,10 @@ export function App({
         setShowClosed((v) => !v);
         return;
       }
+      if (input === 'b') {
+        setShowBacklog((v) => !v);
+        return;
+      }
       if (input === 'c' && selected) {
         if (selected.status === 'closed') showFlash(`${selected.id} is already closed`);
         else setConfirmCloseId(selected.id);
@@ -265,7 +271,7 @@ export function App({
     { isActive: isRawModeSupported === true },
   );
 
-  const listLabel = showClosed ? ' All Tasks ' : ' Active Tasks ';
+  const listLabel = ` Roadmap${showBacklog ? ' + backlog' : ''}${showClosed ? ' + closed' : ''} `;
   const detailLabel = selected ? ` ${shortId(selected.id)} ` : ' Description ';
 
   const detailBody: Array<{ text: string; bold?: boolean }> = [];
@@ -387,7 +393,7 @@ export function App({
         </Box>
       )}
       <Text backgroundColor="gray" color="black" wrap="truncate-end">
-        {fitBar(legendText(showClosed), workspaceInfo, columns)}
+        {fitBar(legendText(showClosed, showBacklog), workspaceInfo, columns)}
       </Text>
       <Text backgroundColor="white" color="black" wrap="truncate-end">
         {fitBar(flash ? ` ${flash}` : STATUS_HINTS, '', columns)}
